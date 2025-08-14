@@ -4,11 +4,11 @@ import path from "path";
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt } = await req.json();
+    const { sandboxId, message, projectDir } = await req.json();
     
-    if (!prompt) {
+    if (!sandboxId || !message) {
       return new Response(
-        JSON.stringify({ error: "Prompt is required" }),
+        JSON.stringify({ error: "Sandbox ID and message are required" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
@@ -20,19 +20,19 @@ export async function POST(req: NextRequest) {
       );
     }
     
-    console.log("[API] Starting Daytona generation for prompt:", prompt);
+    console.log(`[API] Starting modification for sandbox ${sandboxId}:`, message);
     
     // Create a streaming response
     const encoder = new TextEncoder();
     const stream = new TransformStream();
     const writer = stream.writable.getWriter();
     
-    // Start the async generation
+    // Start the async modification
     (async () => {
       try {
-        // Use the generate-in-daytona.ts script
-        const scriptPath = path.join(process.cwd(), "scripts", "generate-in-daytona.ts");
-        const child = spawn("npx", ["tsx", scriptPath, prompt], {
+        // Use the modify-app.ts script
+        const scriptPath = path.join(process.cwd(), "scripts", "modify-app.ts");
+        const child = spawn("npx", ["tsx", scriptPath, sandboxId, message], {
           env: {
             ...process.env,
             DAYTONA_API_KEY: process.env.DAYTONA_API_KEY,
@@ -40,8 +40,6 @@ export async function POST(req: NextRequest) {
           },
         });
         
-        let sandboxId = "";
-        let previewUrl = "";
         let buffer = "";
         
         // Capture stdout
@@ -163,10 +161,13 @@ export async function POST(req: NextRequest) {
                 );
               }
             }
-            // Parse tool results
-            else if (line.includes('__TOOL_RESULT__')) {
-              // Skip tool results for now to reduce noise
-              continue;
+            // Parse modification completion
+            else if (line.includes('__MODIFICATION_COMPLETE__')) {
+              await writer.write(
+                encoder.encode(`data: ${JSON.stringify({ 
+                  type: "modification_complete" 
+                })}\n\n`)
+              );
             }
             // Regular progress messages
             else {
@@ -185,18 +186,6 @@ export async function POST(req: NextRequest) {
                     message: output 
                   })}\n\n`)
                 );
-                
-                // Extract sandbox ID
-                const sandboxMatch = output.match(/Sandbox created: ([a-f0-9-]+)/);
-                if (sandboxMatch) {
-                  sandboxId = sandboxMatch[1];
-                }
-                
-                // Extract preview URL
-                const previewMatch = output.match(/Preview URL: (https:\/\/[^\s]+)/);
-                if (previewMatch) {
-                  previewUrl = previewMatch[1];
-                }
               }
             }
           }
@@ -205,7 +194,7 @@ export async function POST(req: NextRequest) {
         // Capture stderr
         child.stderr.on("data", async (data) => {
           const error = data.toString();
-          console.error("[Daytona Error]:", error);
+          console.error("[Modify Error]:", error);
           
           // Only send actual errors, not debug info
           if (error.includes("Error") || error.includes("Failed")) {
@@ -231,24 +220,18 @@ export async function POST(req: NextRequest) {
           child.on("error", reject);
         });
         
-        // Send completion with preview URL
-        if (previewUrl) {
-          await writer.write(
-            encoder.encode(`data: ${JSON.stringify({ 
-              type: "complete", 
-              sandboxId,
-              previewUrl 
-            })}\n\n`)
-          );
-          console.log(`[API] Generation complete. Preview URL: ${previewUrl}`);
-        } else {
-          throw new Error("Failed to get preview URL");
-        }
+        // Send completion
+        await writer.write(
+          encoder.encode(`data: ${JSON.stringify({ 
+            type: "complete" 
+          })}\n\n`)
+        );
+        console.log(`[API] Modification complete for sandbox ${sandboxId}`);
         
         // Send done signal
         await writer.write(encoder.encode("data: [DONE]\n\n"));
       } catch (error: any) {
-        console.error("[API] Error during generation:", error);
+        console.error("[API] Error during modification:", error);
         await writer.write(
           encoder.encode(`data: ${JSON.stringify({ 
             type: "error", 

@@ -1,1 +1,4 @@
-{}
+{
+  "/generate/page": "app/generate/page.js",
+  "/api/generate-daytona/route": "app/api/generate-daytona/route.js"
+}
